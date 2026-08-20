@@ -31,6 +31,8 @@ DallasTemperature glassSensor(&oneWireGlass);
 HX711 scale;
 File dataFile;
 
+float weightOffset = 0.0;
+
 // --- Time Synchronization Variable ---
 unsigned long startTime = 0;
 unsigned long timeOffset = 0;//recording the last-connected time[if disconnected at 13 sec, goes on from that]
@@ -209,6 +211,11 @@ void setup()
     }
 
     scale.tare(50);
+    
+    weightOffset = getStableWeight(10);
+    
+    Serial.print(F("Auto Zero Offset Set To: "));
+    Serial.println(weightOffset);
     Serial.println(F("Tare complete. Baseline forced to 0g."));
   }
   else
@@ -238,7 +245,8 @@ void loop()
   float currentWeight = 0.0;
   if (scale.is_ready())
   {
-    currentWeight = getStableWeight(25) + 112.0;
+    currentWeight = getStableWeight(15) - weightOffset;
+
     if (currentWeight > -3.0 && currentWeight < 3.0)
     {
       currentWeight = 0.0;
