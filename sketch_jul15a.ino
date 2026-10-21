@@ -1,9 +1,12 @@
+// Build 20261021 1739
+
 #include <Wire.h>
 #include <SPI.h>
 #include <SD.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include "HX711.h"
+#include <RTClib.h>
 
 // ==========================================
 // CONFIGURATION SWITCH
@@ -31,6 +34,9 @@ DallasTemperature glassSensor(&oneWireGlass);
 HX711 scale;
 File dataFile;
 
+RTC_DS3231 rtc;
+bool rtcReady = false;
+
 float weightOffset = 0.0;
 
 // --- Time Synchronization Variable ---
@@ -52,6 +58,21 @@ void printLeftAlignedWithBorder(String text, int width)
     Serial.print(' ');
   }
   Serial.println(F("|"));
+}
+
+String getTimestamp()
+{
+  if (!rtcReady)
+  {
+    return String(millis());
+  }
+
+  DateTime now = rtc.now();
+
+  char buf[20];
+  snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d", now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
+
+  return String(buf);
 }
 
 unsigned long readLastTimestamp(const char* filename)
@@ -123,9 +144,43 @@ float getStableWeight(byte samples)
 void setup()
 {
   Serial.begin(115200);
+  delay(3000);
   Wire.begin();
 
   Serial.println(F("--- Initializing Distillation Monitoring Rig ---"));
+
+  
+  Serial.print(F("Initializing RTC..."));
+  if (!rtc.begin())
+  {
+    Serial.println(F(" FAILED. Check wiring. Falling back to millis()-based timestamps."));
+    rtcReady = false;
+  }
+  else
+  {
+  rtcReady = true;
+  Serial.println(F(" OK."));
+
+  DateTime now = rtc.now();
+  DateTime compileTime(F(__DATE__), F(__TIME__));
+
+  Serial.print(F("[DEBUG] Firmware compiled at: "));
+  Serial.print(F(__DATE__)); Serial.print(F(" ")); Serial.println(F(__TIME__));
+
+  Serial.print(F("[DEBUG] RTC now: "));
+  Serial.println(now.timestamp());   // YYYY-MM-DDThh:mm:ss 형식
+
+  if (rtc.lostPower() || now.unixtime() < compileTime.unixtime())
+  {
+    Serial.println(F("RTC behind compile time or lost power -> setting to compile time."));
+    rtc.adjust(compileTime);
+  }
+  else
+  {
+    Serial.println(F("RTC time already valid, keeping current time."));
+  }
+  }
+
 
   // 1. Initialize Dallas OneWire Temperature Sensors
   waterSensor.begin();
@@ -147,7 +202,7 @@ void setup()
     dataFile = SD.open("distill.csv", FILE_WRITE);
     if (dataFile)
     {
-      dataFile.println("Timestamp_ms,WaterTemp_C,GlassTemp_C,Weight_g,pH,EC_uS");
+      dataFile.println("Timestamp_ms,RealTime,WaterTemp_C,GlassTemp_C,Weight_g,pH,EC_uS");
       dataFile.close();
       Serial.println(F("CSV Header created successfully: distill.csv"));
     }
@@ -233,6 +288,7 @@ void setup()
 void loop()
 {
   unsigned long relativeMillis = (millis() - startTime) + timeOffset;
+  String realTimestamp = getTimestamp();
 
   // --- 1. Read Temperatures via OneWire ---
   waterSensor.requestTemperatures();
@@ -443,10 +499,13 @@ else
   }
 
   // --- Output Full Live Dataset to Serial Monitor ---
-  Serial.println(F("+-------------------------+"));
+  Serial.println(F("+--------------------------------+"));
 
   Serial.print(F("| Time: "));
-  printLeftAlignedWithBorder(String(relativeMillis) + "ms", 17);
+  printLeftAlignedWithBorder(String(relativeMillis) + "ms", 25);
+
+  Serial.print(F("| RealTime: "));
+  printLeftAlignedWithBorder(realTimestamp, 21);
 
   unsigned long minutes = relativeMillis / 60000;
   unsigned long seconds = (relativeMillis % 60000) / 1000;
@@ -455,33 +514,34 @@ else
   String secondsFormatted = String(relativeMillis / 1000.0, 2) + "s";
   String timeFormatted = String(minutes) + "m " + String(seconds) + "s " + String(remainderMs) + "ms";
   Serial.print(F("| Sec : "));
-  printLeftAlignedWithBorder(secondsFormatted, 17);
+  printLeftAlignedWithBorder(secondsFormatted, 25);
   
   Serial.print(F("| Min : "));
-  printLeftAlignedWithBorder(timeFormatted, 17);
+  printLeftAlignedWithBorder(timeFormatted, 25);
 
   Serial.print(F("| WaterTemp: "));
-  printLeftAlignedWithBorder(String(waterTemperature, 1) + "C", 12);
+  printLeftAlignedWithBorder(String(waterTemperature, 1) + "C", 20);
 
   Serial.print(F("| GlassTemp: "));
-  printLeftAlignedWithBorder(String(glassTemperature, 1) + "C", 12);
+  printLeftAlignedWithBorder(String(glassTemperature, 1) + "C", 20);
 
   Serial.print(F("| Weight: "));
-  printLeftAlignedWithBorder(String(currentWeight, 1) + "g", 15);
+  printLeftAlignedWithBorder(String(currentWeight, 1) + "g", 23);
 
   Serial.print(F("| pH: "));
-  printLeftAlignedWithBorder(String(phValue, 2) + " pH", 19);
+  printLeftAlignedWithBorder(String(phValue, 2) + " pH", 27);
 
   Serial.print(F("| EC: "));
-  printLeftAlignedWithBorder(String(ecValue, 1) + " µS/cm", 20);
+  printLeftAlignedWithBorder(String(ecValue, 1) + " µS/cm", 28);
 
-  Serial.println(F("+-------------------------+"));
+  Serial.println(F("+--------------------------------+"));
 
   // --- Commit All Log Values to the MicroSD Card ---
   dataFile = SD.open("distill.csv", FILE_WRITE);
   if (dataFile)
   {
     dataFile.print(relativeMillis); dataFile.print(",");
+    dataFile.print("=\""); dataFile.print(realTimestamp); dataFile.print("\""); dataFile.print(",");
     dataFile.print(waterTemperature); dataFile.print(",");
     dataFile.print(glassTemperature); dataFile.print(",");
     dataFile.print(currentWeight); dataFile.print(",");
